@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>วิเคราะห์สถิติอนุกรมเวลา (Time Series)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--tx:#1f2937;--mut:#6b7280;--pri:#2563eb;--bd:#e5e7eb}
+@media (prefers-color-scheme:dark){:root{--bg:#111827;--card:#1f2937;--tx:#f3f4f6;--mut:#9ca3af;--bd:#374151}}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Sarabun","Noto Sans Thai",system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:20px}
+.wrap{max-width:1100px;margin:auto}
+h1{font-size:1.6rem;margin:0 0 4px}
+.sub{color:var(--mut);margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:block;font-size:.85rem;color:var(--mut);margin-bottom:4px}
+input,select{padding:8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+button{padding:9px 16px;border:0;border-radius:8px;cursor:pointer;font:inherit;font-weight:600}
+.pri{background:var(--pri);color:#fff}.sec{background:#ef4444;color:#fff}.dl{background:#10b981;color:#fff;padding:6px 12px;font-size:.85rem}
+button:disabled{opacity:.5;cursor:not-allowed}
+table{border-collapse:collapse;width:100%}
+td,th{padding:7px 10px;border-bottom:1px solid var(--bd);text-align:left}
+th{color:var(--mut);font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+.ch{height:320px;position:relative}
+.ch-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.ch-h b{font-size:.95rem}
+.msg{color:#ef4444;margin-top:8px}
+.note{color:var(--mut);font-size:.85rem;margin-top:8px}
+.tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.ok{color:#059669;font-weight:600}.bad{color:#dc2626;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>📈 วิเคราะห์สถิติอนุกรมเวลา</h1>
+<div class="sub">อัพโหลดไฟล์ Excel (.xlsx, .xls, .csv) แล้วกดประมวลผล</div>
+
+<div class="card">
+  <div class="row">
+    <div><label>1) เลือกไฟล์ Excel</label><input type="file" id="file" accept=".xlsx,.xls,.csv"></div>
+    <div><label>คอลัมน์ข้อมูล</label><select id="col" disabled></select></div>
+    <div><label>คาบฤดูกาล (Period)</label><input type="number" id="period" value="12" min="2" style="width:90px"></div>
+    <div><label>Rolling window</label><input type="number" id="win" value="12" min="2" style="width:90px"></div>
+    <div><label>จำนวนงวดต่อปี (ใช้พยากรณ์)</label><input type="number" id="spy" value="12" min="1" style="width:90px" title="รายเดือน=12, รายไตรมาส=4, รายปี=1, รายสัปดาห์=52, รายวัน=365"></div>
+    <div><label>รูปแบบแนวโน้มพยากรณ์</label><select id="damp"><option value="0">Damped (ระมัดระวัง)</option><option value="1">เส้นตรงต่อเนื่อง</option></select></div>
+    <div><label>พยากรณ์ล่วงหน้า (ปี) – เลือกหรือพิมพ์เอง</label><input type="number" id="yrs" list="yrlist" value="5" min="0.25" max="50" step="0.25" style="width:110px"><datalist id="yrlist"><option value="1"><option value="2"><option value="3"><option value="5"><option value="7"><option value="10"><option value="15"><option value="20"></datalist></div>
+    <div><label>โมเดลสำหรับกราฟพยากรณ์</label><select id="mdl"><option value="auto">อัตโนมัติ (RMSE ต่ำสุด)</option><option value="naive">Naive</option><option value="snaive">Seasonal Naive</option><option value="ltrend">Linear Trend + Seasonal</option><option value="hw">Holt-Winters</option><option value="arima">ARIMA</option><option value="sarima">SARIMA</option></select></div>
+    <button class="pri" id="run" disabled>⚙️ ประมวลผล</button>
+    <button class="sec" id="reset">🔄 Reset</button>
+  </div>
+  <div class="note">รูปแบบไฟล์: แถวแรกเป็นชื่อคอลัมน์ คอลัมน์แรกเป็นวันที่/ช่วงเวลา (ถ้ามี) และคอลัมน์อื่นเป็นค่าตัวเลข</div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div id="out" style="display:none">
+  <div class="tables">
+    <div class="card"><h3>สถิติพื้นฐาน</h3><table id="t1"></table></div>
+    <div class="card"><h3>การทดสอบทางสถิติ</h3><table id="t2"></table></div>
+  </div>
+  <div class="grid" id="charts"></div>
+</div>
+</div>
+
+<script>
+let rows=[],headers=[],charts=[];
+const $=id=>document.getElementById(id);
+const bg={id:'bg',beforeDraw(c){const x=c.ctx;x.save();x.globalCompositeOperation='destination-over';x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.restore()}};
+
+$('file').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return; $('msg').textContent='';
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{
+      const wb=XLSX.read(ev.target.result,{type:'array',cellDates:true});
+      const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:null});
+      headers=d[0].map((h,i)=>h==null?'คอลัมน์ '+(i+1):String(h)); rows=d.slice(1).filter(r=>r.some(v=>v!=null));
+      const numCols=headers.map((h,i)=>i).filter(i=>rows.filter(r=>typeof r[i]==='number').length>=rows.length*0.8);
+      if(!numCols.length) throw new Error('ไม่พบคอลัมน์ตัวเลข');
+      $('col').innerHTML=numCols.map(i=>`<option value="${i}">${headers[i]}</option>`).join('');
+      $('col').disabled=false;$('run').disabled=false;
+    }catch(err){$('msg').textContent='อ่านไฟล์ไม่สำเร็จ: '+err.message}
+  };
+  r.readAsArrayBuffer(f);
+});
+
+['yrs','mdl','spy','damp'].forEach(i=>$(i).addEventListener('change',()=>{if($('out').style.display!=='none')$('run').click()}));
+$('reset').onclick=()=>{
+  charts.forEach(c=>c.destroy());charts=[];
+  $('file').value='';rows=[];headers=[];
+  $('col').innerHTML='';$('col').disabled=true;$('run').disabled=true;
+  $('period').value=12;$('win').value=12;$('spy').value=12;$('damp').value='0';$('yrs').value=5;$('mdl').value='auto';
+  $('out').style.display='none';$('charts').innerHTML='';$('t1').innerHTML=$('t2').innerHTML='';$('msg').textContent='';
+};
+
+// ---------- สถิติ ----------
+const sum=a=>a.reduce((s,v)=>s+v,0),mean=a=>sum(a)/a.length;
+const varr=a=>{const m=mean(a);return sum(a.map(v=>(v-m)**2))/(a.length-1)};
+const quant=(s,p)=>{const i=(s.length-1)*p,l=Math.floor(i);return s[l]+(s[Math.ceil(i)]-s[l])*(i-l)};
+function acf(y,K){const n=y.length,m=mean(y),c0=sum(y.map(v=>(v-m)**2));const r=[1];
+  for(let k=1;k<=K;k++){let s=0;for(let t=k;t<n;t++)s+=(y[t]-m)*(y[t-k]-m);r.push(s/c0)}return r}
+function pacf(r,K){const p=[1];let phi=[[],[r[1]]];p.push(r[1]);
+  for(let k=2;k<=K;k++){let num=r[k],den=1;const pr=phi[k-1];
+    for(let j=1;j<k;j++){num-=pr[j-1]*r[k-j];den-=pr[j-1]*r[j]}
+    const a=num/den;const cur=[];for(let j=1;j<k;j++)cur.push(pr[j-1]-a*pr[k-j-1]);cur.push(a);phi[k]=cur;p.push(a)}
+  return p}
+function inv(M){const n=M.length,A=M.map((r,i)=>[...r,...Array.from({length:n},(_,j)=>+(i===j))]);
+  for(let i=0;i<n;i++){let p=i;for(let r=i+1;r<n;r++)if(Math.abs(A[r][i])>Math.abs(A[p][i]))p=r;[A[i],A[p]]=[A[p],A[i]];
+    const d=A[i][i];for(let j=0;j<2*n;j++)A[i][j]/=d;
+    for(let r=0;r<n;r++)if(r!==i){const f=A[r][i];for(let j=0;j<2*n;j++)A[r][j]-=f*A[i][j]}}
+  return A.map(r=>r.slice(n))}
+function ols(X,y){const n=X.length,k=X[0].length;
+  const XtX=Array.from({length:k},(_,i)=>Array.from({length:k},(_,j)=>sum(X.map(r=>r[i]*r[j]))));
+  const Xty=Array.from({length:k},(_,i)=>sum(X.map((r,t)=>r[i]*y[t])));
+  const iv=inv(XtX),b=iv.map(r=>sum(r.map((v,j)=>v*Xty[j])));
+  const res=y.map((v,t)=>v-sum(X[t].map((x,i)=>x*b[i])));
+  const s2=sum(res.map(e=>e*e))/(n-k);return{b,se:b.map((_,i)=>Math.sqrt(s2*iv[i][i]))}}
+function adf(y){const n=y.length,k=Math.min(8,Math.round(Math.cbrt(n)));
+  const dy=y.slice(1).map((v,i)=>v-y[i]);const X=[],Y=[];
+  for(let t=k;t<dy.length;t++){const r=[1,y[t]];for(let j=1;j<=k;j++)r.push(dy[t-j]);X.push(r);Y.push(dy[t])}
+  const o=ols(X,Y);return{stat:o.b[1]/o.se[1],k}}
+const erf=x=>{const s=Math.sign(x);x=Math.abs(x);const t=1/(1+.3275911*x);
+  return s*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-.284496736)*t+.254829592)*t*Math.exp(-x*x))};
+const Phi=z=>.5*(1+erf(z/Math.SQRT2));
+const chi2sf=(x,k)=>1-Phi((Math.cbrt(x/k)-(1-2/(9*k)))/Math.sqrt(2/(9*k)));
+
+function decompose(y,m){const n=y.length,tr=Array(n).fill(null);
+  for(let t=0;t<n;t++){let s=0,c=0;
+    if(m%2===0){if(t-m/2<0||t+m/2>=n)continue;for(let j=-m/2;j<=m/2;j++){const w=(Math.abs(j)===m/2)?.5:1;s+=w*y[t+j]}tr[t]=s/m}
+    else{const h=(m-1)/2;if(t-h<0||t+h>=n)continue;for(let j=-h;j<=h;j++)s+=y[t+j];tr[t]=s/m}}
+  const sa=Array.from({length:m},()=>[]);
+  y.forEach((v,t)=>{if(tr[t]!=null)sa[t%m].push(v-tr[t])});
+  let si=sa.map(a=>mean(a));const mi=mean(si);si=si.map(v=>v-mi);
+  const se=y.map((_,t)=>si[t%m]);
+  const re=y.map((v,t)=>tr[t]==null?null:v-tr[t]-se[t]);
+  return{tr,se,re,si}}
+
+// Holt-Winters (Additive, ETS(A,A,A)) + damped trend, เลือกพารามิเตอร์ด้วย grid search (min SSE)
+function hw(y,m,phi){
+  const n=y.length;
+  const run=(a,bt,g)=>{
+    let l,b,s=Array(m).fill(0);
+    if(m>1){const m1=mean(y.slice(0,m)),m2=mean(y.slice(m,2*m));b=(m2-m1)/m;l=m1-b*(m+1)/2;
+      for(let i=0;i<m;i++)s[i]=y[i]-(m1+b*(i-(m-1)/2))}
+    else{b=(y[n-1]-y[0])/(n-1);l=y[0]-b}
+    let sse=0;
+    for(let t=0;t<n;t++){const st=s[t%m],e=y[t]-(l+phi*b+st);sse+=e*e;
+      const ln=l+phi*b+a*e;b=phi*b+a*bt*e;l=ln;s[t%m]=st+g*(1-a)*e}
+    return{sse,l,b,s}};
+  let best=null;
+  for(const a of [.05,.1,.2,.3,.5,.7,.9])for(const bt of [.01,.05,.1,.2])for(const g of (m>1?[.05,.2,.4,.7]:[0])){
+    const r=run(a,bt,g);if(!best||r.sse<best.sse)best={...r,a,bt,g}}
+  const sigma=Math.sqrt(best.sse/n);
+  const fore=H=>{const yh=[],lo=[],hi=[];let ds=0,v=1;
+    for(let h=1;h<=H;h++){ds+=Math.pow(phi,h);const f=best.l+ds*best.b+best.s[(n-1+h)%m],sd=sigma*Math.sqrt(v);
+      yh.push(f);lo.push(f-1.96*sd);hi.push(f+1.96*sd);const c=best.a+best.a*best.bt*ds;v+=c*c}
+    return{yh,lo,hi}};
+  return{fore,a:best.a,bt:best.bt,g:best.g,sigma};
+}
+
+// ---------- โมเดลพยากรณ์ (Naive, Seasonal Naive, Linear Trend, Holt-Winters, ARIMA, SARIMA) ----------
+const sdv=a=>Math.sqrt(varr(a));
+const polyMul=(a,b)=>{const r=Array(a.length+b.length-1).fill(0);a.forEach((x,i)=>b.forEach((z,j)=>r[i+j]+=x*z));return r};
+const pacT=x=>{let ph=[];x.forEach((v,i)=>{const a=Math.tanh(v),nw=[];for(let j=0;j<i;j++)nw.push(ph[j]-a*ph[i-1-j]);nw.push(a);ph=nw});return ph};
+function css(w,ph,th,t0){const n=w.length,e=Array(n).fill(0);let s=0,cnt=0;
+  for(let t=t0;t<n;t++){let v=w[t];for(let i=0;i<ph.length;i++)if(t-1-i>=0)v-=ph[i]*w[t-1-i];
+    for(let j=0;j<th.length;j++)if(t-1-j>=0)v-=th[j]*e[t-1-j];e[t]=v;s+=v*v;cnt++}
+  return{s,e,cnt}}
+function nm(f,x0,it){const n=x0.length;let P=[x0.slice()];
+  for(let i=0;i<n;i++){const x=x0.slice();x[i]+=0.3;P.push(x)}
+  let F=P.map(f);
+  for(let k=0;k<it;k++){const o=F.map((v,i)=>i).sort((a,b)=>F[a]-F[b]);P=o.map(i=>P[i]);F=o.map(i=>F[i]);
+    if(Math.abs(F[n]-F[0])<1e-10*(1+Math.abs(F[0])))break;
+    const c=Array(n).fill(0);for(let i=0;i<n;i++)for(let j=0;j<n;j++)c[j]+=P[i][j]/n;
+    const mv=t=>c.map((v,j)=>v+t*(P[n][j]-v)),xr=mv(-1),fr=f(xr);
+    if(fr<F[0]){const xe=mv(-2),fe=f(xe);if(fe<fr){P[n]=xe;F[n]=fe}else{P[n]=xr;F[n]=fr}}
+    else if(fr<F[n-1]){P[n]=xr;F[n]=fr}
+    else{const xc=mv(fr<F[n]?-.5:.5),fv=f(xc);
+      if(fv<Math.min(fr,F[n])){P[n]=xc;F[n]=fv}else for(let i=1;i<=n;i++){P[i]=P[i].map((v,j)=>P[0][j]+.5*(v-P[0][j]));F[i]=f(P[i])}}}
+  let b=0;for(let i=1;i<=n;i++)if(F[i]<F[b])b=i;return P[b]}
+const mk=g=>({fore:H=>{const yh=[],lo=[],hi=[];for(let h=1;h<=H;h++){const[v,sd]=g(h);yh.push(v);lo.push(v-1.96*sd);hi.push(v+1.96*sd)}return{yh,lo,hi}}});
+function mNaive(y){const n=y.length,l=y[n-1],s=sdv(y.slice(1).map((v,i)=>v-y[i]));return mk(h=>[l,s*Math.sqrt(h)])}
+function mSN(y,m){const n=y.length;if(m<2||n<2*m)return null;
+  const s=sdv(y.slice(m).map((v,i)=>v-y[i]));return mk(h=>[y[n-m+((h-1)%m)],s*Math.sqrt(Math.floor((h-1)/m)+1)])}
+function mLT(y,m){const n=y.length,tt=y.map((_,i)=>i),mt=mean(tt),my=mean(y),sxx=sum(tt.map(t=>(t-mt)**2));
+  const sl=sum(tt.map((t,i)=>(t-mt)*(y[i]-my)))/sxx,ic=my-sl*mt;let si=null;
+  const rs=y.map((v,i)=>v-ic-sl*i);
+  if(m>1&&n>=2*m){si=Array.from({length:m},(_,k)=>mean(rs.filter((_,i)=>i%m===k)));const c=mean(si);si=si.map(v=>v-c)}
+  const sg=Math.sqrt(sum(rs.map((v,i)=>(v-(si?si[i%m]:0))**2))/Math.max(1,n-2));
+  const r=mk(h=>{const t=n-1+h;return[ic+sl*t+(si?si[t%m]:0),sg*Math.sqrt(1+1/n+(t-mt)**2/sxx)]});
+  r.name=si?'Linear Trend + Seasonal':'Linear Trend';return r}
+function mArima(y,m,D){const n=y.length;if(n<15||(D&&n<3*m))return null;
+  let z=D?y.slice(m).map((v,i)=>v-y[i]):y.slice(),d=0;
+  const st=v=>{try{return adf(v).stat<-2.86}catch(e){return true}};
+  while(d<2&&z.length>15&&!st(z)){z=z.slice(1).map((v,i)=>v-z[i]);d++}
+  let a=[1];for(let i=0;i<d;i++)a=polyMul(a,[1,-1]);
+  if(D){const s=Array(m+1).fill(0);s[0]=1;s[m]=-1;a=polyMul(a,s)}
+  const mu=d+D>=2?0:mean(z),w=z.map(v=>v-mu),mp=n>1500?2:3,mq=n>1500?1:2;let best=null;
+  for(let p=0;p<=mp;p++)for(let q=0;q<=mq;q++){if(p+q>w.length/4)continue;
+    const f=x=>{const s=css(w,pacT(x.slice(0,p)),pacT(x.slice(p)).map(v=>-v),mp).s;return isFinite(s)?s:1e30};
+    const x=p+q?nm(f,Array(p+q).fill(0),300):[],ph=pacT(x.slice(0,p)),th=pacT(x.slice(p)).map(v=>-v),r=css(w,ph,th,mp);
+    const aic=r.cnt*Math.log(Math.max(r.s,1e-12)/r.cnt)+2*(p+q+1);
+    if(!best||aic<best.aic)best={aic,p,q,ph,th,e:r.e,s:r.s,cnt:r.cnt}}
+  const sg=Math.sqrt(best.s/best.cnt),G=polyMul([1,...best.ph.map(v=>-v)],a);
+  const name=(D?'SARIMA':'ARIMA')+`(${best.p},${d},${best.q})`+(D?`(0,1,0)[${m}]`:'');
+  return{name,fore:H=>{const wz=w.slice(),ee=best.e.slice(),yy=y.slice(),yh=[],lo=[],hi=[],psi=[];
+    for(let h=0;h<H;h++){const t=wz.length;let v=0;
+      for(let i=0;i<best.p;i++)if(t-1-i>=0)v+=best.ph[i]*wz[t-1-i];
+      for(let j=0;j<best.q;j++)if(t-1-j>=0)v+=best.th[j]*ee[t-1-j];
+      wz.push(v);ee.push(0);const k=yy.length;let val=v+mu;for(let i=1;i<a.length;i++)val-=a[i]*yy[k-i];yy.push(val);yh.push(val)}
+    let acc=0;
+    for(let j=0;j<H;j++){let ps=j===0?1:(j<=best.q?best.th[j-1]:0);
+      for(let i=1;i<=Math.min(j,G.length-1);i++)ps-=G[i]*psi[j-i];
+      psi[j]=ps;acc+=ps*ps;const sd=sg*Math.sqrt(acc);lo.push(yh[j]-1.96*sd);hi.push(yh[j]+1.96*sd)}
+    return{yh,lo,hi}}}}
+const MODELS=[
+ {id:'naive',name:'Naive',fit:y=>mNaive(y)},
+ {id:'snaive',name:'Seasonal Naive',fit:(y,m)=>mSN(y,m)},
+ {id:'ltrend',name:'Linear Trend + Seasonal',fit:(y,m)=>mLT(y,m)},
+ {id:'hw',name:'Holt-Winters',fit:(y,m,phi)=>hw(y,y.length>=2*m?m:1,phi)},
+ {id:'arima',name:'ARIMA',fit:(y,m)=>mArima(y,m,0)},
+ {id:'sarima',name:'SARIMA',fit:(y,m)=>(m>=2&&m<=60)?mArima(y,m,1):null}];
+const COL=['#64748b','#10b981','#f59e0b','#8b5cf6','#ef4444','#14b8a6'];
+
+// ---------- วาดกราฟ ----------
+function card(title,cfg,tall){
+  const d=document.createElement('div');d.className='card';
+  d.innerHTML=`<div class="ch-h"><b>${title}</b><button class="dl">⬇ PNG</button></div><div class="ch"><canvas></canvas></div>`;
+  $('charts').appendChild(d);
+  cfg.plugins=[...(cfg.plugins||[]),bg];
+  cfg.options=Object.assign({responsive:true,maintainAspectRatio:false,animation:false},cfg.options||{});
+  const ch=new Chart(d.querySelector('canvas'),cfg);charts.push(ch);
+  d.querySelector('.dl').onclick=()=>{const a=document.createElement('a');a.href=ch.toBase64Image('image/png',1);a.download=title.replace(/[^\wก-๙]+/g,'_')+'.png';a.click()};
+}
+const line=(labels,sets,extra={})=>({type:'line',data:{labels,datasets:sets.map(s=>({pointRadius:0,borderWidth:1.5,tension:0,spanGaps:false,...s}))},options:extra});
+const axes=(x,y)=>({scales:{x:{title:{display:!!x,text:x},ticks:{maxTicksLimit:10}},y:{title:{display:!!y,text:y}}}});
+
+$('run').onclick=()=>{
+  try{
+    charts.forEach(c=>c.destroy());charts=[];$('charts').innerHTML='';$('msg').textContent='';
+    const ci=+$('col').value;
+    const idx=[];rows.forEach((r,i)=>{if(typeof r[ci]==='number'&&isFinite(r[ci]))idx.push(i)});
+    const y=idx.map(i=>rows[i][ci]),n=y.length;
+    if(n<10)throw new Error('ข้อมูลน้อยเกินไป (ต้องมีอย่างน้อย 10 ค่า)');
+    const fc=rows.length&&ci!==0?0:-1;
+    const lab=idx.map((i,k)=>{const v=fc===0?rows[i][0]:null;
+      if(v instanceof Date)return v.toISOString().slice(0,10);return v!=null?String(v):String(k+1)});
+    const name=headers[ci];
+    const m=Math.max(2,+$('period').value||12),w=Math.max(2,+$('win').value||12);
+
+    // สถิติพื้นฐาน
+    const mu=mean(y),sd=Math.sqrt(varr(y)),s=[...y].sort((a,b)=>a-b);
+    const m2=sum(y.map(v=>(v-mu)**2))/n,sk=sum(y.map(v=>(v-mu)**3))/n/m2**1.5,ku=sum(y.map(v=>(v-mu)**4))/n/m2**2-3;
+    const f=v=>Number.isFinite(v)?(Math.abs(v)>=1e5||(Math.abs(v)<1e-3&&v!==0)?v.toExponential(3):(+v.toFixed(4)).toLocaleString()):'-';
+    const t1=[['จำนวนข้อมูล (n)',n],['ค่าเฉลี่ย',mu],['ค่ามัธยฐาน',quant(s,.5)],['ส่วนเบี่ยงเบนมาตรฐาน',sd],['ความแปรปรวน',varr(y)],
+      ['ค่าต่ำสุด',s[0]],['Q1',quant(s,.25)],['Q3',quant(s,.75)],['ค่าสูงสุด',s[n-1]],['พิสัย',s[n-1]-s[0]],
+      ['สัมประสิทธิ์การแปรผัน (CV %)',sd/mu*100],['ความเบ้ (Skewness)',sk],['ความโด่ง (Excess Kurtosis)',ku]];
+    $('t1').innerHTML='<tr><th>ตัวสถิติ</th><th>ค่า</th></tr>'+t1.map(r=>`<tr><td>${r[0]}</td><td>${f(r[1])}</td></tr>`).join('');
+
+    // ทดสอบ
+    const K=Math.min(40,Math.floor(n/2)-1),r=acf(y,K),p=pacf(r,K),ci95=1.96/Math.sqrt(n);
+    const A=adf(y),L=Math.min(10,K),Q=n*(n+2)*sum(Array.from({length:L},(_,i)=>r[i+1]**2/(n-i-1)));
+    const pQ=chi2sf(Q,L),JB=n/6*(sk**2+ku**2/4),pJ=Math.exp(-JB/2);
+    const tt=Array.from({length:n},(_,i)=>i),mt=mean(tt),sl=sum(tt.map((t,i)=>(t-mt)*(y[i]-mu)))/sum(tt.map(t=>(t-mt)**2)),ic=mu-sl*mt;
+    const stat=A.stat<-2.86;
+    const t2=[['ADF statistic (lag='+A.k+')',f(A.stat),stat?'<span class="ok">นิ่ง (ที่ระดับ 5%, ค่าวิกฤต −2.86)</span>':'<span class="bad">ไม่นิ่ง (ค่าวิกฤต 5% = −2.86)</span>'],
+      ['Ljung-Box Q (lag='+L+')',f(Q),pQ<.05?'<span class="bad">มีสหสัมพันธ์ในตัวเอง (p='+f(pQ)+')</span>':'<span class="ok">ไม่มีสหสัมพันธ์ (p='+f(pQ)+')</span>'],
+      ['Jarque-Bera',f(JB),pJ<.05?'<span class="bad">ไม่เป็นโค้งปกติ (p='+f(pJ)+')</span>':'<span class="ok">ใกล้เคียงโค้งปกติ (p='+f(pJ)+')</span>'],
+      ['ความชันแนวโน้มเชิงเส้น',f(sl),sl>0?'แนวโน้มเพิ่มขึ้น':sl<0?'แนวโน้มลดลง':'-'],
+      ['ACF lag-1',f(r[1]),'']];
+    $('t2').innerHTML='<tr><th>การทดสอบ</th><th>ค่า</th><th>ผล</th></tr>'+t2.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+    $('out').style.display='block';
+
+    // 1 อนุกรมเวลา + แนวโน้มเชิงเส้น
+    card('อนุกรมเวลา: '+name,line(lab,[{label:name,data:y,borderColor:'#2563eb'},
+      {label:'แนวโน้มเชิงเส้น',data:tt.map(t=>ic+sl*t),borderColor:'#ef4444',borderDash:[6,4]}],axes('เวลา',name)));
+    // 2 Rolling
+    const rm=[],rs=[];for(let t=0;t<n;t++){if(t<w-1){rm.push(null);rs.push(null)}else{const a=y.slice(t-w+1,t+1);rm.push(mean(a));rs.push(Math.sqrt(varr(a)))}}
+    card('Rolling Mean & Std (window='+w+')',line(lab,[{label:'Rolling mean',data:rm,borderColor:'#10b981'},{label:'Rolling std',data:rs,borderColor:'#f59e0b'}],axes('เวลา','')));
+    // 3 Histogram
+    const B=Math.max(5,Math.min(30,Math.ceil(Math.log2(n)+1))),bw=(s[n-1]-s[0])/B||1,h=Array(B).fill(0);
+    y.forEach(v=>h[Math.min(B-1,Math.floor((v-s[0])/bw))]++);
+    card('ฮิสโทแกรม',{type:'bar',data:{labels:h.map((_,i)=>f(s[0]+bw*(i+.5))),datasets:[{label:'ความถี่',data:h,backgroundColor:'#6366f1',categoryPercentage:1,barPercentage:.95}]},options:axes(name,'ความถี่')});
+    // 4 Box plot (วาดเอง)
+    const q1=quant(s,.25),q3=quant(s,.75),iq=q3-q1,lo=s.find(v=>v>=q1-1.5*iq),hi=[...s].reverse().find(v=>v<=q3+1.5*iq),out=y.filter(v=>v<lo||v>hi);
+    card('Box Plot',{type:'bar',data:{labels:[name],datasets:[{label:'Q1–Q3',data:[[q1,q3]],backgroundColor:'rgba(37,99,235,.5)',borderColor:'#2563eb',borderWidth:2}]},
+      options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{min:s[0]-.05*(s[n-1]-s[0]),max:s[n-1]+.05*(s[n-1]-s[0])}}},
+      plugins:[{id:'bx',afterDatasetsDraw(c){const x=c.ctx,X=c.scales.x,yy=c.chartArea.top+c.chartArea.height/2,hh=18;x.save();x.strokeStyle='#111';x.lineWidth=2;
+        const L=(a,b,c1,d)=>{x.beginPath();x.moveTo(a,b);x.lineTo(c1,d);x.stroke()};
+        L(X.getPixelForValue(lo),yy,X.getPixelForValue(q1),yy);L(X.getPixelForValue(q3),yy,X.getPixelForValue(hi),yy);
+        [lo,hi].forEach(v=>L(X.getPixelForValue(v),yy-hh/2,X.getPixelForValue(v),yy+hh/2));
+        const md=X.getPixelForValue(quant(s,.5));x.strokeStyle='#ef4444';L(md,yy-30,md,yy+30);
+        x.fillStyle='#111';out.forEach(v=>{x.beginPath();x.arc(X.getPixelForValue(v),yy,3,0,7);x.fill()});x.restore()}}]});
+    // 5 Lag plot
+    card('Lag Plot (y(t) vs y(t−1))',{type:'scatter',data:{datasets:[{label:'y(t) vs y(t−1)',data:y.slice(1).map((v,i)=>({x:y[i],y:v})),backgroundColor:'rgba(37,99,235,.6)',pointRadius:3}]},options:axes('y(t−1)','y(t)')});
+    // 6 ผลต่างอันดับ 1
+    const d1=y.slice(1).map((v,i)=>v-y[i]);
+    card('ผลต่างอันดับ 1 (First Difference)',line(lab.slice(1),[{label:'Δy',data:d1,borderColor:'#8b5cf6'}],axes('เวลา','Δy')));
+    // 7,8 ACF PACF
+    const lags=Array.from({length:K+1},(_,i)=>i);
+    const cf=(t,vals)=>card(t,{type:'bar',data:{labels:lags.slice(1),datasets:[
+      {label:t,data:vals.slice(1),backgroundColor:'#2563eb',order:2},
+      {type:'line',label:'+95% CI',data:lags.slice(1).map(()=>ci95),borderColor:'#ef4444',borderDash:[5,4],pointRadius:0,borderWidth:1,order:1},
+      {type:'line',label:'−95% CI',data:lags.slice(1).map(()=>-ci95),borderColor:'#ef4444',borderDash:[5,4],pointRadius:0,borderWidth:1,order:1}]},
+      options:axes('Lag','')});
+    cf('ACF (Autocorrelation)',r);cf('PACF (Partial Autocorrelation)',p);
+    // 9 Decomposition
+    if(n>=2*m){
+      const D=decompose(y,m);
+      card('Decomposition: แนวโน้ม (Trend)',line(lab,[{label:'Trend',data:D.tr,borderColor:'#ef4444'}],axes('เวลา','')));
+      card('Decomposition: ฤดูกาล (Seasonal)',line(lab,[{label:'Seasonal',data:D.se,borderColor:'#10b981'}],axes('เวลา','')));
+      card('Decomposition: ส่วนที่เหลือ (Residual)',line(lab,[{label:'Residual',data:D.re,borderColor:'#f59e0b'}],axes('เวลา','')));
+      card('ดัชนีฤดูกาล (Seasonal Index, period='+m+')',{type:'bar',data:{labels:D.si.map((_,i)=>i+1),datasets:[{label:'Seasonal index',data:D.si,backgroundColor:'#14b8a6'}]},options:axes('ตำแหน่งในคาบ','')});
+      // Seasonal subseries (แต่ละรอบเป็น 1 เส้น)
+      const cyc=Math.floor(n/m),sets=[];
+      for(let c=0;c<cyc;c++)sets.push({label:'รอบ '+(c+1),data:y.slice(c*m,(c+1)*m),borderWidth:1.2,borderColor:`hsl(${c*360/cyc},65%,50%)`});
+      card('Seasonal Plot (ซ้อนทุกรอบ)',line(Array.from({length:m},(_,i)=>i+1),sets,{...axes('ตำแหน่งในคาบ',name),plugins:{legend:{display:cyc<=12}}}));
+    }else{
+      $('msg').textContent='ข้อมูลสั้นกว่า 2 เท่าของคาบฤดูกาล จึงข้ามการแยกส่วนประกอบ (Decomposition)';
+    }
+
+
+    // ---------- เปรียบเทียบโมเดล & พยากรณ์ ----------
+    const spy=Math.max(1,Math.round(+$('spy').value||12)),phi=$('damp').value==='1'?1:0.98;
+    const yrs=Math.min(50,Math.max(0.25,+$('yrs').value||5)),HZ=Math.min(5000,Math.max(1,Math.round(yrs*spy)));
+    const nt=Math.min(Math.max(2,Math.round(Math.max(Math.min(m,Math.floor(n/3)),n*0.2))),Math.floor(n/2)),trn=y.slice(0,n-nt),te=y.slice(n-nt);
+    const MR=[];
+    MODELS.forEach(M=>{try{
+      const fm=M.fit(trn,m,phi);if(!fm)return;
+      const fp=fm.fore(nt).yh,er=te.map((v,i)=>v-fp[i]),pe=te.map((v,i)=>Math.abs(v)>1e-9?Math.abs(er[i]/v):null).filter(v=>v!=null);
+      const full=M.fit(y,m,phi);if(!full)return;
+      MR.push({id:M.id,name:full.name||M.name,rmse:Math.sqrt(mean(er.map(e=>e*e))),mae:mean(er.map(Math.abs)),mape:pe.length?mean(pe)*100:NaN,fp,F:full.fore(HZ)});
+    }catch(e){console.warn(M.name,e)}});
+    if(!MR.length)throw new Error('ไม่สามารถสร้างโมเดลพยากรณ์ได้');
+    MR.forEach((r,i)=>r.c=COL[i%COL.length]);
+    const bestM=MR.reduce((a,b)=>b.rmse<a.rmse?b:a),sel=$('mdl').value==='auto'?bestM:(MR.find(r=>r.id===$('mdl').value)||bestM);
+    const lastD=(fc===0&&rows[idx[n-1]][0] instanceof Date)?rows[idx[n-1]][0]:null;
+    const fLab=i=>{if(!lastD)return '+'+i;const d=new Date(lastD);
+      if(spy===12)d.setUTCMonth(d.getUTCMonth()+i);else if(spy===4)d.setUTCMonth(d.getUTCMonth()+3*i);
+      else if(spy===1)d.setUTCFullYear(d.getUTCFullYear()+i);else if(spy===52)d.setUTCDate(d.getUTCDate()+7*i);
+      else d.setUTCDate(d.getUTCDate()+i);return d.toISOString().slice(0,10)};
+    const fl=Array.from({length:HZ},(_,i)=>fLab(i+1)),pad=Array(n-1).fill(null),last=[y[n-1]];
+
+    // 1) เปรียบเทียบในช่วงทดสอบ (holdout)
+    const ctx=Math.min(n-nt,Math.max(nt,2*m));
+    card('เปรียบเทียบโมเดลในช่วงทดสอบ (Holdout '+nt+' งวดล่าสุด)',line(lab.slice(n-nt-ctx),[
+      {label:'ข้อมูลจริง',data:y.slice(n-nt-ctx),borderColor:'#2563eb',borderWidth:2.5},
+      ...MR.map(r=>({label:r.name,data:Array(ctx).fill(null).concat(r.fp),borderColor:r.c,borderDash:[5,3]}))],axes('เวลา',name)));
+    // 2) RMSE / MAPE
+    const bar=(t,k,u)=>card(t,{type:'bar',data:{labels:MR.map(r=>r.name),datasets:[{label:t,data:MR.map(r=>+r[k].toFixed(3)),backgroundColor:MR.map(r=>r===bestM?'#10b981':'#94a3b8')}]},
+      options:{plugins:{legend:{display:false}},scales:{y:{title:{display:true,text:u}},x:{ticks:{maxRotation:35}}}}});
+    bar('RMSE ของแต่ละโมเดล (ยิ่งต่ำยิ่งดี)','rmse','RMSE');
+    bar('MAPE ของแต่ละโมเดล (%)','mape','MAPE (%)');
+    // 3) พยากรณ์ทุกโมเดล
+    card('พยากรณ์ล่วงหน้า '+yrs+' ปี: เปรียบเทียบทุกโมเดล',line(lab.concat(fl),[
+      {label:'ข้อมูลจริง',data:y.concat(Array(HZ).fill(null)),borderColor:'#2563eb',borderWidth:2},
+      ...MR.map(r=>({label:r.name,data:pad.concat(last,r.F.yh),borderColor:r.c,borderDash:[5,3]}))],axes('เวลา',name)));
+    // 4) โมเดลที่เลือก + ช่วงความเชื่อมั่น
+    card('พยากรณ์ '+yrs+' ปี ด้วย '+sel.name+' (ช่วงความเชื่อมั่น 95%)',line(lab.concat(fl),[
+      {label:'ข้อมูลจริง',data:y.concat(Array(HZ).fill(null)),borderColor:'#2563eb'},
+      {label:'พยากรณ์',data:pad.concat(last,sel.F.yh),borderColor:'#ef4444',borderDash:[6,4]},
+      {label:'upper',data:pad.concat(last,sel.F.hi),borderColor:'rgba(239,68,68,.3)',borderWidth:.8},
+      {label:'ช่วงความเชื่อมั่น 95%',data:pad.concat(last,sel.F.lo),borderColor:'rgba(239,68,68,.3)',borderWidth:.8,fill:'-1',backgroundColor:'rgba(239,68,68,.12)'}],
+      {...axes('เวลา',name),plugins:{legend:{labels:{filter:i=>i.text!=='upper'}}}}));
+    // ตาราง
+    const ranked=[...MR].sort((a,b)=>a.rmse-b.rmse),ys=[...new Set([1,3,5,10,Math.round(yrs*100)/100])].filter(v=>v<=yrs+1e-9).sort((a,b)=>a-b);
+    const fd=document.createElement('div');fd.className='card';fd.style.gridColumn='1/-1';
+    fd.innerHTML='<h3>ตารางเปรียบเทียบความคลาดเคลื่อน (ทดสอบย้อนหลัง '+nt+' งวดล่าสุด)</h3><table><tr><th>อันดับ</th><th>โมเดล</th><th>RMSE</th><th>MAE</th><th>MAPE (%)</th></tr>'
+      +ranked.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}${r===bestM?' <span class="ok">★ ดีที่สุด</span>':''}${r===sel?' (ใช้พยากรณ์)':''}</td><td>${f(r.rmse)}</td><td>${f(r.mae)}</td><td>${f(r.mape)}</td></tr>`).join('')
+      +'</table><h3 style="margin-top:18px">ค่าพยากรณ์ด้วย '+sel.name+'</h3><table><tr><th>ล่วงหน้า</th><th>ค่าพยากรณ์</th><th>ช่วง 95% ล่าง</th><th>ช่วง 95% บน</th><th>เปลี่ยนจากค่าสุดท้าย</th></tr>'
+      +ys.map(Y=>{const k=Math.max(1,Math.min(HZ,Math.round(Y*spy)))-1,v=sel.F.yh[k];return `<tr><td>${Y} ปี</td><td>${f(v)}</td><td>${f(sel.F.lo[k])}</td><td>${f(sel.F.hi[k])}</td><td>${f((v-y[n-1])/Math.abs(y[n-1])*100)}%</td></tr>`}).join('')
+      +'</table><div class="note">โมเดลถูกประเมินโดยแบ่งข้อมูลส่วนท้ายไว้ทดสอบ แล้วปรับโมเดลใหม่ด้วยข้อมูลทั้งหมดก่อนพยากรณ์จริง ARIMA เลือก (p,d,q) อัตโนมัติด้วย AIC และเลือก d จากการทดสอบ ADF ยิ่งพยากรณ์ไกลยิ่งไม่แน่นอน ผลลัพธ์นี้ใช้ประกอบการตัดสินใจเท่านั้น</div>';
+    $('charts').appendChild(fd);
+  }catch(err){$('msg').textContent='เกิดข้อผิดพลาด: '+err.message}
+};
+</script>
+</body>
+</html>
